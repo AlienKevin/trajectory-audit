@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BottomUpRolloutVerdict",
+  "description": "One judge's evidence-grounded verdict on one agent rollout. The ONLY fixed classification is outcome_class (TP/TN/FP/FN); everything else is open free-text grounded in cited evidence, kept deliberately free of any failure taxonomy so it can be clustered downstream.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rollout_id",
+    "verifier_signal",
+    "judge_verdict",
+    "outcome_class",
+    "outcome_rationale",
+    "evidence",
+    "verifier_or_task_concern"
+  ],
+  "$defs": {
+    "citation": {
+      "description": "A precise, machine-readable pointer into one artifact. Exactly one of two shapes, so a viewer can jump to the cited step(s) or highlight the cited line range.",
+      "type": "object",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["kind", "steps", "quote"],
+          "properties": {
+            "kind":  { "const": "trajectory" },
+            "steps": {
+              "type": "array", "minItems": 1,
+              "items": { "type": "integer", "minimum": 0 },
+              "description": "Precise trajectory step index/indices the claim rests on (0-indexed steps in trial/trajectory.json)."
+            },
+            "quote": { "type": "string", "description": "Short verbatim snippet from those step(s)." }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["kind", "file", "line_start", "line_end", "quote"],
+          "properties": {
+            "kind":       { "const": "file" },
+            "file":       { "type": "string", "description": "Artifact path ('task/…' or 'trial/…', e.g. 'task/solution/solve.sh', 'trial/test_stdout.txt') OR a live-workspace absolute path (e.g. '/testbed/src/foo.py')." },
+            "line_start": { "type": "integer", "minimum": 1 },
+            "line_end":   { "type": "integer", "minimum": 1, "description": "Inclusive end line; == line_start for a single line." },
+            "quote":      { "type": "string", "description": "Short verbatim snippet spanning [line_start, line_end]." }
+          }
+        }
+      ]
+    }
+  },
+  "properties": {
+    "rollout_id":  { "type": "string", "description": "<task_id>__<trial_id>" },
+    "task_id":     { "type": "string" },
+    "trial_id":    { "type": "string" },
+    "agent_model": { "type": "string" },
+    "harness":     { "type": "string" },
+    "benchmark":   { "type": "string" },
+
+    "verifier_signal": {
+      "type": "object",
+      "description": "Echoed verbatim from result.json — the verifier's machine verdict, the 'given'. binary_reward is the PASS(1)/FAIL(0) gate.",
+      "additionalProperties": false,
+      "required": ["binary_reward"],
+      "properties": {
+        "binary_reward": { "type": "integer", "enum": [0, 1] },
+        "reward":        { "type": ["number", "null"] },
+        "status":        { "type": ["string", "null"] },
+        "reward_metric": { "type": ["string", "null"] }
+      }
+    },
+
+    "judge_verdict": {
+      "type": "object",
+      "description": "The judge's INDEPENDENT assessment, against task intent + reference solution.",
+      "additionalProperties": false,
+      "required": ["task_truly_solved", "confidence", "summary"],
+      "properties": {
+        "task_truly_solved": {
+          "type": "boolean",
+          "description": "Did the agent genuinely accomplish what the task asked, as the reference solution would recognize — independent of whether the tests passed?"
+        },
+        "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+        "summary": {
+          "type": "string",
+          "description": "One short plain sentence for list views — the bottom line of what happened (no footnotes needed). The full grounded judgment goes in outcome_rationale."
+        }
+      }
+    },
+
+    "outcome_class": {
+      "type": "string",
+      "enum": ["TP", "TN", "FP", "FN"],
+      "description": "verifier signal x truth. TP: pass & solved. TN: fail & not-solved. FP: pass & NOT solved (spurious pass / weak verifier). FN: fail & solved (spurious fail / broken task)."
+    },
+    "outcome_rationale": {
+      "type": "string",
+      "description": "The COMPLETE judgment as ONE cohesive paragraph (no line breaks, headers, or bullets). Open with a crisp characterization of the verdict (e.g. 'This was a genuine agent-fault failure — the verifier's FAIL is correct.'), then flow through what the verifier did/reported, what the task required, what the agent actually did/produced, and why this is the right TP/TN/FP/FN — with inline footnote(s) [N] grounding every factual claim in the numbered evidence. For FP/FN (claims the verifier is wrong) be concrete: name the gap between what the tests check and what the task/reference require, or the harness/format/env failure."
+    },
+
+    "evidence": {
+      "type": "array",
+      "description": "Grounded claims. Each claim carries >=1 machine-readable citation pinning precise trajectory step(s) or a file line-range. The summary / rationale must be backed here.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "citations"],
+        "properties": {
+          "claim":  { "type": "string", "description": "A specific, load-bearing factual statement, footnoted from the summary/rationale by its 1-based position in this list." },
+          "citations": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/citation" }
+          }
+        }
+      }
+    },
+
+    "verifier_or_task_concern": {
+      "type": ["string", "null"],
+      "description": "null if the task + verifier look sound. Otherwise a grounded note on why the verifier or task itself appears at fault (over-strict, gameable, ambiguous spec, broken environment) — feeds the separate broken-task / patch workflow. Typically non-null exactly when outcome_class is FP or FN."
+    }
+  }
+}

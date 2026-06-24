@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PerTaskInsightfulnessReport",
+  "description": "One judge's per-TASK insightfulness report. The judge is given ONE benchmark task and ALL of its agent trajectories at once, and writes a single report-level explanation of what the task–trajectory set teaches us about agent capability, limitation, workflow, or benchmark design. The 9 prose sections map 1:1 to the insightfulness prompt; `insightfulness` is the single fixed verdict. Metadata (task_id, n_trials, benchmark) is copied from /insight/meta.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "n_trials",
+    "benchmark",
+    "insightfulness",
+    "tldr",
+    "main_insight",
+    "why_it_matters",
+    "evidence_from_trajectories",
+    "surface_failure_vs_root_cause",
+    "intended_vs_unexpected_insight",
+    "generalizability",
+    "confounds",
+    "implications_for_future_design"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "Copied from /insight/meta.json — the Harbor-index task identifier."
+    },
+    "n_trials": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Copied from /insight/meta.json — number of trial trajectories the judge was given for this task."
+    },
+    "benchmark": {
+      "type": "string",
+      "description": "Copied from /insight/meta.json — the source benchmark family (e.g. algotune, swebenchverified, gaia2)."
+    },
+    "insightfulness": {
+      "type": "string",
+      "enum": ["high", "medium", "low"],
+      "description": "The single fixed verdict: how insightful, instructional, or enlightening this task (with its trajectories) is for the next generation of agent, model, and benchmark-task design."
+    },
+    "tldr": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Verdict of insightfulness. Briefly summarize the main insight, or explain why the task is not very insightful."
+    },
+    "main_insight": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What does this task–trajectory set reveal about agent capability, limitation, or benchmark design?"
+    },
+    "why_it_matters": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Why would this insight be useful for improving future agents, training methods, evaluation design, or benchmark construction?"
+    },
+    "evidence_from_trajectories": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What specific agent behaviors support this interpretation? Refer to concrete moments, not vague impressions. Compare across trajectories where multiple are present."
+    },
+    "surface_failure_vs_root_cause": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What is the visible failure, and what deeper cause is most likely behind it?"
+    },
+    "intended_vs_unexpected_insight": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Did the agents fail on the capability the task was designed to test, or did the task reveal a different but still valuable bottleneck?"
+    },
+    "generalizability": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Would improving this weakness help agents beyond this specific task? Explain why or why not."
+    },
+    "confounds": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Are there reasons to doubt the insight, such as ambiguous instructions, environment issues, verifier problems, missing context, or insufficient trajectory evidence?"
+    },
+    "implications_for_future_design": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What does this suggest for future benchmark tasks, agent training, tool-use design, or evaluation protocols?"
+    }
+  }
+}

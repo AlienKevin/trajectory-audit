@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# Generated Harbor tasks and runs can contain large artifacts, trajectories,
+# logs, and environment variables captured from benchmark execution.
+tasks/
+runs/
+*_out/
+*.log
+*.pid
+
+# Generated reports and local summaries.
+summary.json
+*.jsonl
+compare*_audit.*
+fresh*_audit.*
