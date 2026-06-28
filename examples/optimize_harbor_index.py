@@ -25,7 +25,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("verdicts", help="Harbor verdicts.json pack")
     ap.add_argument("--backend", choices=["openai", "mock"], default="openai")
-    ap.add_argument("--model", default="openai/gpt-4o-mini")
+    ap.add_argument("--model", default="openai/gpt-4o", help="labeling/critique model")
+    ap.add_argument("--embed-model", default="openai/text-embedding-3-large")
     ap.add_argument("--out", default="result.json")
     ap.add_argument("--max-iters", type=int, default=30)
     ap.add_argument("--critic-rounds", type=int, default=2)
@@ -44,8 +45,8 @@ def main():
     verds = harbor_index.load(args.verdicts)
     print(f"loaded {len(verds)} verdicts", flush=True)
     backend = (MockBackend() if args.backend == "mock"
-               else OpenAICompatBackend.from_env(chat_model=args.model, workers=args.workers,
-                                                 mechanism_model=args.mechanism_model,
+               else OpenAICompatBackend.from_env(chat_model=args.model, embed_model=args.embed_model,
+                                                 workers=args.workers, mechanism_model=args.mechanism_model,
                                                  reasoning_effort=args.reasoning_effort))
 
     res = optimize(verds, backend, max_iters=args.max_iters,

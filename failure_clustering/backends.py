@@ -165,7 +165,7 @@ class OpenAICompatBackend:
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self.chat_model = chat_model
         self.mechanism_model = mechanism_model or chat_model
-        self.reasoning_effort = reasoning_effort  # e.g. "high" for gpt-5.x; passed to OpenRouter
+        self.reasoning_effort = reasoning_effort  # applied to the mechanism step only (e.g. "high" for gpt-5.x)
         self.embed_model = embed_model
         self.embed_dim_fallback = embed_dim_fallback
         self.max_retries = max_retries
@@ -183,9 +183,9 @@ class OpenAICompatBackend:
                    base_url=os.environ.get("OPENAI_BASE_URL") or None, **kw)
 
     # -- low level -------------------------------------------------------
-    def _chat(self, system: str, user: str, *, model: str | None = None) -> str:
+    def _chat(self, system: str, user: str, *, model: str | None = None, reasoning: str | None = None) -> str:
         last = None
-        extra = {"reasoning": {"effort": self.reasoning_effort}} if self.reasoning_effort else None
+        extra = {"reasoning": {"effort": reasoning}} if reasoning else None
         for attempt in range(self.max_retries):
             try:
                 r = self._client.chat.completions.create(
@@ -201,8 +201,8 @@ class OpenAICompatBackend:
                 time.sleep(1.5 * (attempt + 1))
         raise RuntimeError(f"chat failed after {self.max_retries} retries: {last}")
 
-    def _chat_json(self, system: str, user: str, *, default, model: str | None = None):
-        raw = self._chat(system + " Respond with JSON only, no prose.", user, model=model)
+    def _chat_json(self, system: str, user: str, *, default, model: str | None = None, reasoning: str | None = None):
+        raw = self._chat(system + " Respond with JSON only, no prose.", user, model=model, reasoning=reasoning)
         m = _JSON_RE.search(raw)
         if not m:
             return default
@@ -242,6 +242,7 @@ class OpenAICompatBackend:
                 + json.dumps(payload, ensure_ascii=False),
                 default={"items": []},
                 model=self.mechanism_model,
+                reasoning=self.reasoning_effort,
             )
             got = {d.get("i"): d.get("mechanism", "") for d in res.get("items", []) if isinstance(d, dict)}
             return [got.get(j) or features.first_clause(chunk[j]) for j in range(len(chunk))]
