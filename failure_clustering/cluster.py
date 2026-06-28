@@ -9,11 +9,12 @@ embedding/LLM nondeterminism.
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict
 
 import numpy as np
 
-from .features import cosine_dist
+from .features import cosine_dist, tokenize
 from .parallel import DEFAULT_WORKERS, pmap
 from .schema import Clustering, Mode, Verdict
 
@@ -65,6 +66,39 @@ def suggest_k(n: int) -> int:
     return max(2, min(8, round(math.sqrt(n / 2))))
 
 
+def _mean_silhouette(X: np.ndarray, labels: np.ndarray) -> float:
+    """Centroid-based mean silhouette for a labeling of unit vectors."""
+    uniq = list(set(labels.tolist()))
+    if len(uniq) < 2:
+        return 0.0
+    cent = {}
+    for u in uniq:
+        c = X[labels == u].mean(axis=0)
+        cent[u] = c / (np.linalg.norm(c) or 1.0)
+    sils = []
+    for i, lab in enumerate(labels):
+        a = 1.0 - X[i] @ cent[lab]
+        b = min(1.0 - X[i] @ cent[u] for u in uniq if u != lab)
+        sils.append((b - a) / (max(a, b) or 1.0))
+    return float(np.mean(sils))
+
+
+def best_k_labels(X: np.ndarray, max_k: int, *, min_silhouette: float = 0.03) -> np.ndarray:
+    """Pick the number of clusters (≤ ``max_k``) where mean silhouette peaks — the
+    natural granularity. Returns one cluster if no split clears ``min_silhouette``."""
+    n = len(X)
+    if n <= 1 or max_k <= 1:
+        return np.zeros(n, dtype=int)
+    D = cosine_dist(X)
+    best_labels, best_s = np.zeros(n, dtype=int), 0.0
+    for k in range(2, min(max_k, n) + 1):
+        labels = agglomerative(D, k)
+        s = _mean_silhouette(X, labels)
+        if s > best_s:
+            best_s, best_labels = s, labels
+    return best_labels if best_s >= min_silhouette else np.zeros(n, dtype=int)
+
+
 def _embed_lens(backend, texts: list[str], lens: str | None) -> np.ndarray:
     prompt = texts if lens is None else [f"[{lens}] {t}" for t in texts]
     return backend.embed(prompt)
@@ -87,13 +121,25 @@ def cluster_stratum(
     *,
     outcome_class: str,
     k: int | None = None,
+    max_k: int | None = None,
     lenses: list[str] | None = None,
     workers: int = DEFAULT_WORKERS,
 ) -> dict[int, list[Verdict]]:
-    """Cluster one outcome stratum; return {local_label: [verdicts]}."""
+    """Cluster one outcome stratum; return {local_label: [verdicts]}.
+
+    If ``max_k`` is given, the granularity is auto-selected by silhouette up to
+    that bound (the cap is a maximum, not a target). Otherwise ``k`` (or
+    :func:`suggest_k`) clusters are formed, with consensus across lenses."""
     if not verdicts:
         return {}
     texts = [v.text for v in verdicts]
+    if max_k is not None:
+        X = _embed_lens(backend, texts, (lenses or [None])[0])
+        labels = best_k_labels(X, max_k)
+        out: dict[int, list[Verdict]] = defaultdict(list)
+        for v, lab in zip(verdicts, labels):
+            out[int(lab)].append(v)
+        return out
     k = k or suggest_k(len(verdicts))
     if lenses and len(lenses) > 1 and len(verdicts) > k:
         dmats = pmap(lambda ln: cosine_dist(_embed_lens(backend, texts, ln)), lenses, workers)
@@ -114,11 +160,15 @@ def build_clustering(
     backend,
     *,
     k_per_outcome: dict[str, int] | None = None,
+    max_k_per_outcome: dict[str, int] | None = None,
     lenses: list[str] | None = None,
     label: bool = True,
     workers: int = DEFAULT_WORKERS,
 ) -> Clustering:
-    """Initial stratified, labelled clustering over all outcome classes."""
+    """Initial stratified, labelled clustering over all outcome classes.
+
+    ``max_k_per_outcome`` auto-selects each stratum's granularity by silhouette up
+    to that cap; ``k_per_outcome`` forces an exact count."""
     by_outcome: dict[str, list[Verdict]] = defaultdict(list)
     for v in verdicts:
         by_outcome[v.outcome_class].append(v)
@@ -126,7 +176,9 @@ def build_clustering(
     cluster_list: list[tuple[str, list[Verdict]]] = []
     for oc, members in by_outcome.items():
         k = (k_per_outcome or {}).get(oc)
-        clusters = cluster_stratum(members, backend, outcome_class=oc, k=k, lenses=lenses, workers=workers)
+        max_k = (max_k_per_outcome or {}).get(oc)
+        clusters = cluster_stratum(members, backend, outcome_class=oc, k=k, max_k=max_k,
+                                   lenses=lenses, workers=workers)
         cluster_list.extend((oc, vs) for vs in clusters.values())
 
     # Label every cluster concurrently (independent API calls), then register
@@ -179,6 +231,57 @@ def relabel_all(clustering: Clustering, backend, *, workers: int = DEFAULT_WORKE
     remap: dict[str, str] = {}
     for c, info in zip(present, infos):
         remap[c] = _register_cluster(info, members[c], clustering.outcome_of(c), new_modes)
+    new_assignment = {vid: remap[c] for vid, c in clustering.assignment.items() if c in remap}
+    return Clustering(verdicts=clustering.verdicts, assignment=new_assignment, modes=new_modes)
+
+
+# tokens that mark an artificial sub-split of one mechanism, stripped before merge
+_VARIANT_TOKENS = {"variant", "duplicate", "copy", "part", "tp", "tn", "fp", "fn",
+                   "ii", "iii", "iv", "v", "b", "2", "3", "4", "5"}
+
+
+def _base_name(name: str) -> str:
+    """Normalise a mode title to its mechanism base so artificial sub-splits
+    ('Missing Output', 'Missing Output Variant 2', 'Missing Output TN') collapse."""
+    toks = re.sub(r"[^a-z0-9]+", " ", name.lower()).split()
+    while toks and toks[-1] in _VARIANT_TOKENS:
+        toks.pop()
+    return " ".join(toks)
+
+
+def relabel_global(clustering: Clustering, backend, *, workers: int = DEFAULT_WORKERS, samples: int = 8) -> Clustering:
+    """Name the whole taxonomy in one pass (mutually-distinct, content-accurate
+    titles) and MERGE modes that share a mechanism — same base name within an
+    outcome class. This collapses task-level over-splits ('X', 'X Variant') back
+    to the natural granularity, so a generous ``max_modes`` cap never manufactures
+    duplicate-looking modes. Falls back to :func:`relabel_all` without ``label_all``."""
+    if not hasattr(backend, "label_all"):
+        return relabel_all(clustering, backend, workers=workers)
+    present = clustering.present_codes()
+    members = {c: clustering.members(c) for c in present}
+    clusters = [{"outcome_class": clustering.outcome_of(c),
+                 "samples": [v.text for v in members[c][:samples]]} for c in present]
+    infos = backend.label_all(clusters)
+
+    new_modes: dict[str, Mode] = {}
+    remap: dict[str, str] = {}
+    by_base: dict[tuple[str, str], str] = {}
+    for c, info in zip(present, infos):
+        oc = clustering.outcome_of(c)
+        key = (oc, _base_name(info["name"]))
+        if key in by_base:                        # same mechanism → merge
+            remap[c] = by_base[key]
+            continue
+        code = _dedup(f"{oc}_{info['code']}", new_modes)
+        # prefer the clean base title (drop any 'Variant'/outcome suffix)
+        clean = " ".join(w for w in info["name"].split()
+                         if w.lower().strip(":") not in _VARIANT_TOKENS) or info["name"]
+        new_modes[code] = Mode(code=code, name=clean, outcome_class=oc,
+                               definition=info.get("definition", ""),
+                               membership_test=info.get("membership_test", ""),
+                               exemplar_id=members[c][0].id)
+        by_base[key] = code
+        remap[c] = code
     new_assignment = {vid: remap[c] for vid, c in clustering.assignment.items() if c in remap}
     return Clustering(verdicts=clustering.verdicts, assignment=new_assignment, modes=new_modes)
 

@@ -40,6 +40,10 @@ class LLMBackend(Protocol):
     def label(self, texts: Sequence[str], outcome_class: str) -> dict:
         """Name a cluster. Return {name, code, definition, membership_test}."""
 
+    def label_all(self, clusters: Sequence[dict]) -> list[dict]:
+        """Name a whole taxonomy at once so names are mutually distinct (and true
+        duplicates collide on purpose). Each input: {outcome_class, samples}."""
+
     def coherence(self, texts: Sequence[str]) -> float:
         """0..1 — do these rationales share a single failure mechanism?"""
 
@@ -86,6 +90,23 @@ class MockBackend:
             "definition": f"Rollouts characterised by: {', '.join(toks) or 'n/a'}.",
             "membership_test": f"belongs iff the rationale centres on {', '.join(toks[:2]) or 'n/a'}",
         }
+
+    def label_all(self, clusters: Sequence[dict]) -> list[dict]:
+        out, seen = [], set()
+        for i, c in enumerate(clusters):
+            toks = self._top_tokens(c.get("samples", []))
+            name = " ".join(t.capitalize() for t in toks[:3]) or f"Cluster {i}"
+            base, k = name, 2
+            while name in seen:
+                name, k = f"{base} {k}", k + 1
+            seen.add(name)
+            out.append({
+                "code": ("_".join(toks[:3]) or f"CLUSTER{i}").upper(),
+                "name": name,
+                "definition": f"Rollouts characterised by: {', '.join(toks) or 'n/a'}.",
+                "membership_test": f"belongs iff the rationale centres on {', '.join(toks[:2]) or 'n/a'}",
+            })
+        return out
 
     def coherence(self, texts: Sequence[str]) -> float:
         if len(texts) < 2:
@@ -229,10 +250,15 @@ class OpenAICompatBackend:
 
     def label(self, texts: Sequence[str], outcome_class: str) -> dict:
         sample = list(texts)[:30]
-        sys = ("You name a cluster of agent-rollout failure rationales. Give a "
-               "SCREAMING_SNAKE code, a short Title Case name, a one-sentence "
-               "definition of the shared mechanism, and a falsifiable membership "
-               "test of the form 'belongs iff ...'.")
+        sys = ("You name one cluster of agent-rollout audit rationales that share a "
+               "failure (or success) mechanism. Return: a SCREAMING_SNAKE `code`; a "
+               "clear, SPECIFIC Title Case `name` of 3-6 words that names the concrete "
+               "mechanism and lets a reader tell it apart from other modes — avoid vague "
+               "names like 'Agent Failure', 'Incorrect Result', or 'Wrong Choice'; prefer "
+               "names that say WHAT was wrong and WHERE (e.g. 'Sub-Threshold Optimization "
+               "Speedup', 'Misinferred Grid Transform Rule', 'Wrong Statistical Method'). "
+               "Also a one-sentence `definition` of the shared mechanism, and a falsifiable "
+               "`membership_test` of the form 'belongs iff ...'.")
         res = self._chat_json(
             sys,
             f"outcome_class={outcome_class}. Rationales:\n" + json.dumps(sample, ensure_ascii=False)
@@ -246,6 +272,38 @@ class OpenAICompatBackend:
             "definition": str(res.get("definition") or ""),
             "membership_test": str(res.get("membership_test") or ""),
         }
+
+    def label_all(self, clusters: Sequence[dict]) -> list[dict]:
+        payload = [{"i": i, "outcome_class": c.get("outcome_class"), "samples": list(c.get("samples", []))[:8]}
+                   for i, c in enumerate(clusters)]
+        res = self._chat_json(
+            "You are naming a WHOLE taxonomy of agent-rollout audit clusters at once. "
+            "Each cluster is a SEPARATE mode — give every one a clear, SPECIFIC Title Case "
+            "`name` (3-6 words) that is MUTUALLY DISTINCT from every other cluster: no two "
+            "names may be near-duplicates or paraphrases. When two clusters look similar, "
+            "read their samples and name each by the detail that DISTINGUISHES them (the "
+            "kind of artifact, choice, or computation involved), e.g. 'Wrong Multiple-Choice "
+            "Answer' vs 'Misinferred Grid-Transform Rule'. Say WHAT was wrong and WHERE; "
+            "avoid vague names ('Agent Failure', 'Wrong Choice', 'Incorrect Result'). Also a "
+            "SCREAMING_SNAKE `code`, a one-sentence `definition`, and a 'belongs iff ...' "
+            "`membership_test`. Do NOT put the outcome class (TP/TN/FP/FN) in the name. If "
+            "two clusters truly share one mechanism, give them the IDENTICAL name (do not "
+            "tag one 'Variant') — they will be merged.",
+            "clusters:\n" + json.dumps(payload, ensure_ascii=False)
+            + '\nReturn {"items":[{"i":int,"code":str,"name":str,"definition":str,"membership_test":str}...]}',
+            default={"items": []},
+        )
+        got = {d.get("i"): d for d in res.get("items", []) if isinstance(d, dict)}
+        out = []
+        for i in range(len(clusters)):
+            d = got.get(i) or {}
+            out.append({
+                "code": str(d.get("code") or f"MODE_{i}").upper().replace(" ", "_"),
+                "name": str(d.get("name") or f"Mode {i}"),
+                "definition": str(d.get("definition") or ""),
+                "membership_test": str(d.get("membership_test") or ""),
+            })
+        return out
 
     def coherence(self, texts: Sequence[str]) -> float:
         if len(texts) < 2:

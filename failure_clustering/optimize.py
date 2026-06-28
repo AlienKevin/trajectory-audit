@@ -12,7 +12,7 @@ import numpy as np
 
 from collections import defaultdict
 
-from .cluster import Geometry, build_clustering, cosine_dist, relabel_all
+from .cluster import Geometry, build_clustering, cosine_dist, relabel_all, relabel_global
 from .fitness import Evaluator, mi_stats
 from .parallel import DEFAULT_WORKERS
 from .schema import OUTCOME_CLASSES, Clustering, Verdict
@@ -140,17 +140,22 @@ def optimize(
             by_outcome[v.outcome_class].append(v)
         caps = outcome_caps if outcome_caps and not focus_outcome else \
             allocate_caps(by_outcome, max_modes, focus_outcome, outcome_caps)
-        k_per_outcome = {**caps, **(k_per_outcome or {})}
 
     geom = Geometry.build(work, backend)
     ev = Evaluator(backend, weights, geom=geom, use_coherence=use_coherence)
 
-    initial = build_clustering(work, backend, k_per_outcome=k_per_outcome, lenses=lenses, workers=workers)
+    # Caps are a MAX, not a target: auto-select each stratum's granularity by
+    # silhouette up to the cap, so the taxonomy settles at its natural size (≤ cap)
+    # instead of being forced to the cap and manufacturing duplicate sub-modes.
+    initial = build_clustering(work, backend, k_per_outcome=k_per_outcome,
+                               max_k_per_outcome=caps, lenses=lenses, workers=workers)
     fit0 = ev.fitness(initial)
 
     final, history = critic_loop(initial, geom, ev, rounds=critic_rounds, max_iters=max_iters,
                                  workers=workers, caps=caps, max_modes=max_modes)
-    final = relabel_all(final, backend, workers=workers)  # name the final taxonomy
+    # name the final taxonomy in one global pass: mutually-distinct titles, with
+    # genuine-duplicate modes merged.
+    final = relabel_global(final, backend, workers=workers)
     fit1 = ev.fitness(final)
 
     triage = _silhouette_triage(final, geom)
