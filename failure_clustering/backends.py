@@ -154,6 +154,7 @@ class OpenAICompatBackend:
         chat_model: str = "openai/gpt-4o-mini",
         embed_model: str = "openai/text-embedding-3-small",
         mechanism_model: str | None = None,
+        reasoning_effort: str | None = None,
         embed_dim_fallback: int = 1536,
         max_retries: int = 4,
         batch: int = 24,
@@ -164,6 +165,7 @@ class OpenAICompatBackend:
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self.chat_model = chat_model
         self.mechanism_model = mechanism_model or chat_model
+        self.reasoning_effort = reasoning_effort  # e.g. "high" for gpt-5.x; passed to OpenRouter
         self.embed_model = embed_model
         self.embed_dim_fallback = embed_dim_fallback
         self.max_retries = max_retries
@@ -183,6 +185,7 @@ class OpenAICompatBackend:
     # -- low level -------------------------------------------------------
     def _chat(self, system: str, user: str, *, model: str | None = None) -> str:
         last = None
+        extra = {"reasoning": {"effort": self.reasoning_effort}} if self.reasoning_effort else None
         for attempt in range(self.max_retries):
             try:
                 r = self._client.chat.completions.create(
@@ -190,6 +193,7 @@ class OpenAICompatBackend:
                     messages=[{"role": "system", "content": system},
                               {"role": "user", "content": user}],
                     temperature=0,
+                    extra_body=extra,
                 )
                 return r.choices[0].message.content or ""
             except Exception as e:  # noqa: BLE001 - transient API errors

@@ -36,13 +36,17 @@ def main():
                     help="stronger model just for mechanism extraction — the one "
                          "quality-critical step (a weak model collapses distinct "
                          "failure mechanisms into one bucket). ~9 calls; cheap.")
+    ap.add_argument("--reasoning-effort", default=None,
+                    help="reasoning effort for reasoning models, e.g. 'high' for "
+                         "openai/gpt-5.5 (passed through to OpenRouter)")
     args = ap.parse_args()
 
     verds = harbor_index.load(args.verdicts)
     print(f"loaded {len(verds)} verdicts", flush=True)
     backend = (MockBackend() if args.backend == "mock"
                else OpenAICompatBackend.from_env(chat_model=args.model, workers=args.workers,
-                                                 mechanism_model=args.mechanism_model))
+                                                 mechanism_model=args.mechanism_model,
+                                                 reasoning_effort=args.reasoning_effort))
 
     res = optimize(verds, backend, max_iters=args.max_iters,
                    critic_rounds=args.critic_rounds, workers=args.workers,
