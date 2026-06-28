@@ -15,3 +15,5 @@ summary.json
 *.jsonl
 compare*_audit.*
 fresh*_audit.*
+result*.json
+harbor_result.json

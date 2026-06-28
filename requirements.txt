@@ -1,0 +1,6 @@
+# Core (clustering + optimization). Python 3.10+.
+numpy>=1.24
+
+# Real LLM backend (OpenAI-compatible: OpenRouter, OpenAI, local vLLM, ...).
+# Not needed for the offline MockBackend or the test suite.
+openai>=1.40
